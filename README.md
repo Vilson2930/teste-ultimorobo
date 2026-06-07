@@ -1,192 +1,373 @@
-# ULTIMOROBO TEST LAB
+# ULTIMOROBO — LABORATÓRIO DE VALIDAÇÃO INSTITUCIONAL
 
 ## Visão Geral
 
-O ULTIMOROBO TEST LAB é um ambiente de validação automática criado para auditar e testar os principais motores do ULTIMOROBO antes da utilização em produção.
+O ULTIMOROBO é um sistema institucional de alocação e governança de portfólio.
 
-O objetivo do laboratório é garantir que alterações futuras no código não comprometam a lógica de alocação, risco, liquidez, sobrevivência e governança do sistema.
+O objetivo não é prever mercado.
 
----
+O objetivo é:
 
-## Status Atual
-
-### Resultado da Auditoria
-
-* Testes executados: 43
-* Testes aprovados: 43
-* Testes reprovados: 0
-* Taxa de aprovação: 100%
-
-Status:
-
-APROVADO
+* Sobreviver
+* Preservar capital
+* Controlar risco
+* Ajustar exposição ao ambiente macro
+* Evitar ruína financeira
+* Produzir decisões auditáveis
 
 ---
 
-## Motores Validados
+# Arquitetura Atual
 
-### Macro Engine
+## 1. Macro Engine
 
-Valida:
+Responsável por classificar o regime econômico.
+
+Cenários:
 
 * Expansão Forte
 * Expansão Normal
 * Neutro
 * Contração
 * Stress Sistêmico
-* Baixa Confiança
-* Risk-On com Cautela
+
+Saídas:
+
+* Macro Score
+* Conviction Score
+* Confidence Score
+* Direção de Risco
 
 ---
 
-### Portfolio Engine
+## 2. Portfolio Engine
 
-Valida:
+Transforma o cenário macro em pesos-alvo.
 
-* Ajuste de pesos por regime
-* Aumento de risco em expansão
-* Redução de risco em contração
-* Controle por confiança
-* Controle por momentum
+Responsável por:
+
+* Ajuste de BTC
+* Ajuste de Ouro
+* Ajuste de Títulos
+* Ajuste de Caixa
+* Ajuste de ETFs de crescimento
 
 ---
 
-### Rebalance Engine
+## 3. Rebalance Engine
+
+Responsável pela execução teórica.
 
 Valida:
 
-* Rebalanceamento automático
+* Compra
+* Venda
+* Preservação de USDT
 * Limite de giro
-* Preservação de caixa
-* Controle de compras e vendas
-* Proteção de ativos estratégicos
+* Redução de operações desnecessárias
 
 ---
 
-### Risk Budget Engine
+## 4. Risk Budget Engine
 
-Valida:
+Responsável pela decomposição do risco.
 
-* Contribuição individual de risco
-* Concentração excessiva
-* Asset dominante
-* Score de risco
-* Classificação de robustez
+Calcula:
+
+* Contribuição de risco por ativo
+* Ativo dominante do risco
+* Score agregado de risco
+* Nível de risco da carteira
+
+Saídas:
+
+* Risk Budget Score
+* Risk Budget Level
+* Top Risk Asset
+* Risk Contribution %
 
 ---
 
-### Liquidity Engine
+## 5. Liquidity Engine
 
-Valida:
+Responsável por avaliar liquidez real.
+
+Calcula:
+
+* Liquidez agregada
+* Haircuts
+* Valor bruto
+* Valor líquido
+
+Saídas:
 
 * Liquidity Score
 * Liquidity Level
-* Haircut agregado
-* Valor líquido realizável
-* Robustez operacional
+* Haircut Agregado
 
 ---
 
-### Stress Engine
+## 6. Stress Engine
 
-Valida:
+Executa cenários históricos.
 
-* Cenário 2008
-* Cenário 2020
-* Cenário 2022
+Cenários:
+
+* 2008 Like
+* 2020 Like
+* 2022 Like
 * Cripto Inverno
-* Choque Regulatório
-* Choque Stablecoin
+* Choque Regulatório Cripto
+* Choque Stablecoin Custódia
 
-Métricas:
+Calcula:
 
 * Drawdown
+* TTR
 * Forced Selling
-* Time To Recovery
+* Permanent Impairment
+* Runway
+
+Saídas:
+
 * Stress Score
+* Stress Level
 
 ---
 
-### Governance Engine
+## 7. Counterparty Engine
+
+Responsável por avaliar risco de contraparte.
 
 Valida:
 
-* Comitê Integrado de Risco
-* Veredito Final
-* Dashboard Executivo
-* Kill Switch
-* Sobrevivência Operacional
+* Exposição por custodiante
+* Concentração de contraparte
+* Score de contraparte
+* Flags críticas
+
+Contrapartes monitoradas:
+
+* Self Custody
+* BlackRock
+* State Street
+* Tether
+* Global X
+
+Saídas:
+
+* Counterparty Score
+* Counterparty Level
+* Largest Counterparty
+* Concentration Level
 
 ---
 
-### AI Auditor
+## 8. Governance Engine
 
-Valida:
+Camada de governança institucional.
 
-* Coerência entre motores
-* Survival Failure
-* Forced Selling
-* Contradições lógicas
-* Causa raiz dos problemas
+Integra:
 
----
+* Survival
+* Stress
+* Liquidity
+* Counterparty
+* Risk Budget
 
-## Arquitetura Validada
+Produz:
 
-Macro Engine
-
-↓
-
-Portfolio Engine
-
-↓
-
-Rebalance Engine
-
-↓
-
-Risk Budget Engine
-
-↓
-
-Liquidity Engine
-
-↓
-
-Stress Engine
-
-↓
-
-Governance Engine
-
-↓
-
-AI Auditor
+* Final Verdict
+* Committee Action
+* Governance Score
 
 ---
 
-## Nível de Maturidade
+## 9. AI Auditor
 
-Classificação:
+Auditor determinístico.
 
-INSTITUCIONAL
+Valida coerência entre:
 
-Confiabilidade estimada:
+* Survival
+* Stress
+* Liquidity
+* Counterparty
+* Governance
+* Risk Budget
 
-9.5 / 10
+Produz:
+
+* Audit Score
+* Audit Status
+* Root Cause
 
 ---
 
-## Próximos Passos
+# Cobertura de Testes
 
-* Counterparty Engine
+## Macro Engine
+
+✓ Expansão Forte
+
+✓ Expansão Normal
+
+✓ Neutro
+
+✓ Contração
+
+✓ Stress Sistêmico
+
+✓ Baixa Confiança
+
+✓ Risk On com Cautela
+
+---
+
+## Portfolio Engine
+
+✓ Expansão Forte
+
+✓ Expansão Normal
+
+✓ Neutro
+
+✓ Stress Sistêmico
+
+✓ Baixa Confiança
+
+✓ Momentum Negativo
+
+---
+
+## Rebalance Engine
+
+✓ Não vender BTC em macro favorável
+
+✓ Comprar proteção em macro defensivo
+
+✓ Preservar USDT
+
+✓ Limite de giro
+
+---
+
+## Risk Budget Engine
+
+✓ Geração de saída
+
+✓ Score
+
+✓ Nível
+
+✓ Top Risk Asset
+
+✓ Soma das contribuições
+
+---
+
+## Liquidity Engine
+
+✓ Geração de saída
+
+✓ Liquidity Score
+
+✓ Liquidity Level
+
+✓ Haircut agregado
+
+✓ Valor líquido ≤ valor bruto
+
+---
+
+## Stress Engine
+
+✓ Geração de saída
+
+✓ Cenários
+
+✓ Stress Score
+
+✓ Stress Level
+
+✓ Drawdown máximo
+
+✓ Forced Selling
+
+---
+
+## Governance Engine
+
+✓ Geração de saída
+
+✓ Final Verdict
+
+✓ Governance Score
+
+✓ Survival Kill Switch
+
+✓ Executive Dashboard
+
+---
+
+## Counterparty Engine
+
+✓ Geração de saída
+
+✓ Counterparty Score
+
+✓ Counterparty Level
+
+✓ Largest Counterparty
+
+✓ Concentration Level
+
+---
+
+## AI Auditor
+
+✓ Geração de saída
+
+✓ Status coerente
+
+✓ Score 100
+
+✓ Detecção de Survival Failure
+
+✓ Detecção de Forced Selling
+
+---
+
+# Status Atual
+
+## Resultado dos Testes
+
+```text
+48 PASS
+0 FAIL
+100% APROVADO
+```
+
+## Nota Institucional Atual
+
+```text
+9.6 / 10
+```
+
+---
+
+# Próximos Passos
+
 * Survival Engine
 * Integration Test
 * End-to-End Test
 * Backtest Auditor
+* Production Validation
 
 ---
 
-Última atualização:
+## Última atualização
 
-43 PASS | 0 FAIL
+```text
+48 PASS | 0 FAIL
+```
