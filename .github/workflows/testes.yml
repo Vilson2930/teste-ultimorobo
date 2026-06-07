@@ -1,1 +1,30 @@
+name: Teste Automatico ULTIMOROBO
 
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - principal
+      - main
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Baixar repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas numpy pytest
+
+      - name: Rodar testes automaticos
+        run: |
+          pytest testes/ -v
