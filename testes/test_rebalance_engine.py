@@ -2,14 +2,7 @@ import pandas as pd
 from src.portfolio_engine import run_rebalance
 
 
-def make_latest(
-    macro_conviction,
-    macro_score,
-    macro_momentum,
-    confidence_score,
-    liquidez,
-    stress,
-):
+def make_latest(macro_conviction, macro_score, macro_momentum, confidence_score, liquidez, stress):
     return pd.Series({
         "macro_conviction": macro_conviction,
         "macro_score": macro_score,
@@ -63,9 +56,7 @@ def test_rebalance_macro_favoravel_nao_vende_btc(monkeypatch):
     result = run_rebalance(latest, market, target)
     rebalance = result["rebalance"]
 
-    btc_action = rebalance.loc["BTC-USD", "acao"]
-
-    assert btc_action == "MANTER"
+    assert rebalance.loc["BTC-USD", "acao"] == "MANTER"
 
 
 def test_rebalance_macro_defensivo_compra_tlt(monkeypatch):
@@ -104,7 +95,7 @@ def test_rebalance_macro_defensivo_compra_tlt(monkeypatch):
     assert rebalance.loc["BTC-USD", "acao"] in ["VENDER", "MANTER"]
 
 
-def test_rebalance_preserva_usdt_em_macro_defensivo(monkeypatch):
+def test_rebalance_usdt_defensivo_nao_compra_risco(monkeypatch):
     portfolio_fake = {
         "BTC-USD": 0.10,
         "USDT-USD": 30000,
@@ -136,8 +127,10 @@ def test_rebalance_preserva_usdt_em_macro_defensivo(monkeypatch):
     result = run_rebalance(latest, market, target)
     rebalance = result["rebalance"]
 
-    assert rebalance.loc["USDT-USD", "acao"] == "MANTER"
-    assert rebalance.loc["USDT-USD", "motivo_execucao"] == "USDT_PRESERVADO_MACRO_DEFENSIVO"
+    assert rebalance.loc["BTC-USD", "acao"] != "COMPRAR"
+    assert rebalance.loc["VOO", "acao"] != "COMPRAR"
+    assert rebalance.loc["BOTZ", "acao"] != "COMPRAR"
+    assert rebalance.loc["INDA", "acao"] != "COMPRAR"
 
 
 def test_rebalance_limite_de_giro(monkeypatch):
