@@ -1,374 +1,386 @@
-
-import os
 from datetime import datetime, timezone
+from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 
-OUTPUT_DIR = "outputs"
-ACCESS_MAP_PATH = "config/access_map.csv"
+OUTPUTS = Path("outputs")
 
 
 def utc_now():
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
-def ensure_outputs_dir():
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
+def ensure_outputs():
+    OUTPUTS.mkdir(exist_ok=True)
 
 
-def normalize_bool(series):
-    return (
-        series.astype(str)
-        .str.upper()
-        .str.strip()
-        .isin(["TRUE", "1", "SIM", "YES"])
+def macro_score(series, inverse=False, window=252):
+    series = pd.Series(series).astype(float).replace([np.inf, -np.inf], np.nan)
+
+    rolling_min = series.rolling(window=window, min_periods=60).min()
+    rolling_max = series.rolling(window=window, min_periods=60).max()
+
+    score = 100 * (series - rolling_min) / (rolling_max - rolling_min)
+    score = score.replace([np.inf, -np.inf], np.nan)
+
+    if inverse:
+        score = 100 - score
+
+    return score.clip(0, 100)
+
+
+def build_scores(fred_data, market_data):
+    scores = pd.DataFrame(index=fred_data.index)
+
+    fred_data = fred_data.sort_index().ffill().bfill()
+    market_data = market_data.sort_index().ffill().bfill()
+
+    market_aligned = market_data.reindex(scores.index).ffill().bfill()
+
+    scores["real_yield_spot"] = macro_score(fred_data["real_yield_10y"], inverse=True)
+    scores["real_yield_lag"] = macro_score(fred_data["real_yield_10y"].shift(60), inverse=True)
+    scores["real_yield_trend"] = macro_score(fred_data["real_yield_10y"] - fred_data["real_yield_10y"].shift(60), inverse=True)
+
+    real_yield_acceleration = (
+        fred_data["real_yield_10y"] - fred_data["real_yield_10y"].shift(30)
+    ) - (
+        fred_data["real_yield_10y"].shift(30) - fred_data["real_yield_10y"].shift(60)
+    )
+    scores["real_yield_acceleration"] = macro_score(real_yield_acceleration, inverse=True)
+
+    scores["nfci_spot"] = macro_score(fred_data["financial_conditions"], inverse=True)
+    scores["nfci_lag"] = macro_score(fred_data["financial_conditions"].shift(90), inverse=True)
+    scores["nfci_trend"] = macro_score(fred_data["financial_conditions"] - fred_data["financial_conditions"].shift(90), inverse=True)
+
+    nfci_acceleration = (
+        fred_data["financial_conditions"] - fred_data["financial_conditions"].shift(45)
+    ) - (
+        fred_data["financial_conditions"].shift(45) - fred_data["financial_conditions"].shift(90)
+    )
+    scores["nfci_acceleration"] = macro_score(nfci_acceleration, inverse=True)
+
+    scores["dxy_spot"] = macro_score(market_aligned["dxy"], inverse=True)
+    scores["dxy_lag"] = macro_score(market_aligned["dxy"].shift(60), inverse=True)
+    scores["dxy_trend"] = macro_score(market_aligned["dxy"] - market_aligned["dxy"].shift(60), inverse=True)
+
+    dxy_acceleration = (
+        market_aligned["dxy"] - market_aligned["dxy"].shift(30)
+    ) - (
+        market_aligned["dxy"].shift(30) - market_aligned["dxy"].shift(60)
+    )
+    scores["dxy_acceleration"] = macro_score(dxy_acceleration, inverse=True)
+
+    scores["liquidity_score"] = (
+        scores["real_yield_trend"] * 0.12
+        + scores["real_yield_acceleration"] * 0.08
+        + scores["nfci_trend"] * 0.06
+        + scores["nfci_acceleration"] * 0.04
+        + scores["dxy_trend"] * 0.06
+        + scores["dxy_acceleration"] * 0.04
+        + scores["real_yield_spot"] * 0.15
+        + scores["nfci_spot"] * 0.075
+        + scores["dxy_spot"] * 0.075
+        + scores["real_yield_lag"] * 0.15
+        + scores["nfci_lag"] * 0.075
+        + scores["dxy_lag"] * 0.075
     )
 
+    scores["growth_score"] = macro_score(fred_data["yield_curve"].shift(120), inverse=False)
 
-def build_positions_df(rebalance):
-    df = rebalance.copy().reset_index()
+    scores["high_yield_spread"] = macro_score(fred_data["high_yield_spread"], inverse=True)
+    scores["vix"] = macro_score(market_aligned["vix"], inverse=True)
 
-    if "index" in df.columns:
-        df = df.rename(columns={"index": "ativo"})
-
-    if "ativo" not in df.columns:
-        df = df.rename(columns={df.columns[0]: "ativo"})
-
-    required = ["ativo", "valor_atual", "peso_atual"]
-    missing = [c for c in required if c not in df.columns]
-
-    if missing:
-        raise ValueError(f"rebalance com colunas ausentes: {missing}")
-
-    df["ativo"] = df["ativo"].astype(str).str.strip()
-    df["valor_atual"] = df["valor_atual"].astype(float)
-    df["peso_atual"] = df["peso_atual"].astype(float)
-
-    return df
-
-
-def load_access_map(path=ACCESS_MAP_PATH):
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"Arquivo obrigatório ausente: {path}")
-
-    access = pd.read_csv(path)
-
-    required = [
-        "ativo",
-        "trilho",
-        "entidade",
-        "jurisdicao",
-        "status",
-        "criticidade",
-        "bucket_sobrevivencia",
-        "jurisdicao_valida",
-    ]
-
-    missing = [c for c in required if c not in access.columns]
-
-    if missing:
-        raise ValueError(f"access_map com colunas ausentes: {missing}")
-
-    access["ativo"] = access["ativo"].astype(str).str.strip()
-    access["trilho"] = access["trilho"].astype(str).str.strip()
-    access["entidade"] = access["entidade"].astype(str).str.strip()
-    access["jurisdicao"] = access["jurisdicao"].astype(str).str.strip()
-    access["status"] = access["status"].astype(str).str.upper().str.strip()
-    access["criticidade"] = access["criticidade"].astype(str).str.upper().str.strip()
-    access["bucket_sobrevivencia"] = normalize_bool(access["bucket_sobrevivencia"])
-    access["jurisdicao_valida"] = normalize_bool(access["jurisdicao_valida"])
-
-    return access
-
-
-def financial_haircuts():
-    return {
-        "USDT-USD": 0.02,
-        "TLT": 0.03,
-        "GLD": 0.05,
-        "VOO": 0.03,
-        "INDA": 0.07,
-        "BOTZ": 0.10,
-        "BTC-USD": 0.12,
-    }
-
-
-def entity_haircuts():
-    return {
-        "SELF_CUSTODY": 0.05,
-        "BLACKROCK": 0.01,
-        "STATE_STREET": 0.01,
-        "GLOBAL_X": 0.03,
-        "TETHER": 0.12,
-    }
-
-
-def rail_haircut(trilho):
-    t = str(trilho).upper()
-
-    if "AUTOCUST" in t or "SELF" in t or "COLD" in t:
-        return 0.05
-
-    if "BANK" in t or "BANCO" in t:
-        return 0.03
-
-    if "BROKER" in t or "CORRETORA" in t:
-        return 0.04
-
-    if "EXCHANGE" in t:
-        return 0.10
-
-    if "ETF" in t:
-        return 0.02
-
-    return 0.05
-
-
-def status_penalty(status):
-    s = str(status).upper()
-
-    if s == "ATIVO":
-        return 0.00
-
-    if s in ["LIMITADO", "RESTRITO", "ATENCAO", "ATENÇÃO"]:
-        return 0.25
-
-    if s in ["BLOQUEADO", "SUSPENSO", "INATIVO"]:
-        return 1.00
-
-    return 0.15
-
-
-def criticidade_penalty(criticidade):
-    c = str(criticidade).upper()
-
-    if c in ["BAIXA", "LOW"]:
-        return 0.00
-
-    if c in ["MEDIA", "MÉDIA", "MEDIUM"]:
-        return 0.03
-
-    if c in ["ALTA", "HIGH"]:
-        return 0.08
-
-    if c in ["CRITICA", "CRÍTICA", "CRITICAL"]:
-        return 0.15
-
-    return 0.03
-
-
-def jurisdiction_penalty(jurisdicao_valida):
-    return 0.00 if bool(jurisdicao_valida) else 0.15
-
-
-def classify_liquidity_score(score):
-    if score >= 85:
-        return "ROBUSTO"
-
-    if score >= 70:
-        return "ACEITAVEL"
-
-    if score >= 55:
-        return "FRAGIL"
-
-    return "CRITICO"
-
-
-def classify_access_level(access_score):
-    if access_score >= 90:
-        return "ACESSO_PLENO"
-
-    if access_score >= 75:
-        return "ACESSO_FUNCIONAL"
-
-    if access_score >= 55:
-        return "ACESSO_FRAGIL"
-
-    return "ACESSO_CRITICO"
-
-
-def run_liquidity_engine(rebalance, access_map_path=ACCESS_MAP_PATH):
-    timestamp_utc = utc_now()
-
-    positions = build_positions_df(rebalance)
-    access = load_access_map(access_map_path)
-
-    df = positions.merge(
-        access,
-        on="ativo",
-        how="left",
+    scores["stress_score"] = (
+        scores["high_yield_spread"] * 0.50
+        + scores["vix"] * 0.50
     )
 
-    df["status"] = df["status"].fillna("DESCONHECIDO")
-    df["trilho"] = df["trilho"].fillna("DESCONHECIDO")
-    df["entidade"] = df["entidade"].fillna("DESCONHECIDO")
-    df["jurisdicao"] = df["jurisdicao"].fillna("DESCONHECIDO")
-    df["criticidade"] = df["criticidade"].fillna("MEDIA")
-    df["jurisdicao_valida"] = df["jurisdicao_valida"].fillna(False)
+    scores["core_pce"] = macro_score(fred_data["core_pce"].shift(90), inverse=True)
+    scores["inflation_5y5y"] = macro_score(fred_data["inflation_5y5y"].shift(60), inverse=True)
 
-    fh = financial_haircuts()
-    eh = entity_haircuts()
-
-    df["financial_haircut_pct"] = df["ativo"].map(fh).fillna(0.10)
-
-    df["entity_haircut_pct"] = (
-        df["entidade"]
-        .astype(str)
-        .str.upper()
-        .map(eh)
-        .fillna(0.05)
+    scores["inflation_score"] = (
+        scores["core_pce"] * 0.50
+        + scores["inflation_5y5y"] * 0.50
     )
 
-    df["rail_haircut_pct"] = df["trilho"].apply(rail_haircut)
-    df["jurisdiction_haircut_pct"] = df["jurisdicao_valida"].apply(
-        jurisdiction_penalty
+    scores["dxy_value"] = market_aligned["dxy"]
+    scores["vix_value"] = market_aligned["vix"]
+
+    return scores.sort_index().ffill().bfill()
+
+
+def classify_regime(score):
+    if pd.isna(score):
+        return np.nan
+    if score >= 80:
+        return "EXPANSAO_FORTE"
+    if score >= 60:
+        return "EXPANSAO_NORMAL"
+    if score >= 40:
+        return "NEUTRO"
+    if score >= 20:
+        return "CONTRACAO"
+    return "STRESS_SISTEMICO"
+
+
+def operational_signal(row):
+    if pd.isna(row["macro_conviction"]):
+        return np.nan
+
+    if row["confidence_score"] < 45:
+        return "SINAL_FRACO"
+
+    if row["macro_conviction"] >= 60 and row["macro_momentum"] > 0:
+        return "RISCO_ON_VALIDADO"
+
+    if row["macro_conviction"] >= 60 and row["macro_momentum"] <= 0:
+        return "RISCO_ON_COM_CAUTELA"
+
+    if row["macro_conviction"] < 40:
+        return "DEFENSIVO_VALIDADO"
+
+    return "NEUTRO"
+
+
+def calculate_quality_score(df, columns):
+    total_cells = df[columns].shape[0] * len(columns)
+    if total_cells == 0:
+        return 0
+    missing_cells = df[columns].isna().sum().sum()
+    return round(100 * (1 - missing_cells / total_cells), 0)
+
+
+def build_macro_engine(scores):
+    macro_engine = pd.DataFrame(index=scores.index)
+
+    macro_engine["liquidez"] = scores["liquidity_score"]
+    macro_engine["crescimento"] = scores["growth_score"]
+    macro_engine["stress"] = scores["stress_score"]
+    macro_engine["inflacao"] = scores["inflation_score"]
+
+    macro_engine = macro_engine.ffill().bfill()
+
+    macro_engine["macro_score"] = (
+        macro_engine["liquidez"] * 0.45
+        + macro_engine["crescimento"] * 0.25
+        + macro_engine["stress"] * 0.20
+        + macro_engine["inflacao"] * 0.10
     )
-    df["status_penalty_pct"] = df["status"].apply(status_penalty)
-    df["criticidade_penalty_pct"] = df["criticidade"].apply(criticidade_penalty)
 
-    df["total_haircut_pct"] = (
-        df["financial_haircut_pct"]
-        + df["entity_haircut_pct"]
-        + df["rail_haircut_pct"]
-        + df["jurisdiction_haircut_pct"]
-        + df["status_penalty_pct"]
-        + df["criticidade_penalty_pct"]
-    ).clip(0, 1)
+    macro_engine["momentum_30d"] = macro_engine["macro_score"] - macro_engine["macro_score"].shift(30)
+    macro_engine["momentum_60d"] = macro_engine["macro_score"] - macro_engine["macro_score"].shift(60)
+    macro_engine["momentum_90d"] = macro_engine["macro_score"] - macro_engine["macro_score"].shift(90)
 
-    df["valor_liquido_operacional"] = (
-        df["valor_atual"] * (1 - df["total_haircut_pct"])
+    macro_engine["macro_momentum"] = (
+        macro_engine["momentum_30d"] * 0.50
+        + macro_engine["momentum_60d"] * 0.30
+        + macro_engine["momentum_90d"] * 0.20
+    ).fillna(0)
+
+    macro_engine["macro_momentum_score"] = (50 + macro_engine["macro_momentum"]).clip(0, 100)
+
+    factor_cols = ["liquidez", "crescimento", "stress", "inflacao"]
+
+    macro_engine["factor_dispersion"] = macro_engine[factor_cols].std(axis=1)
+
+    macro_engine["confidence_score"] = (100 - macro_engine["factor_dispersion"]).clip(0, 100)
+
+    macro_engine["macro_conviction"] = (
+        macro_engine["macro_score"] * 0.70
+        + macro_engine["macro_momentum_score"] * 0.20
+        + macro_engine["confidence_score"] * 0.10
     )
 
-    df["access_score"] = (100 * (1 - df["total_haircut_pct"])).round(2)
-    df["access_level"] = df["access_score"].apply(classify_access_level)
+    macro_engine["regime"] = macro_engine["macro_conviction"].apply(classify_regime)
+    macro_engine["sinal_operacional"] = macro_engine.apply(operational_signal, axis=1)
 
-    gross_value = float(df["valor_atual"].sum())
-    liquid_value = float(df["valor_liquido_operacional"].sum())
-
-    aggregate_haircut_pct = (
-        (gross_value - liquid_value) / gross_value
-        if gross_value > 0
-        else 1
+    valid_macro = macro_engine.dropna(
+        subset=["macro_score", "macro_conviction", "regime", "sinal_operacional"]
     )
 
-    liquidity_score = round(100 * (1 - aggregate_haircut_pct), 2)
-    liquidity_level = classify_liquidity_score(liquidity_score)
+    if valid_macro.empty:
+        raise ValueError("macro_engine não possui linha válida.")
 
-    blocked_value = float(
-        df[df["status"].isin(["BLOQUEADO", "SUSPENSO", "INATIVO"])]["valor_atual"].sum()
+    latest = valid_macro.iloc[-1]
+
+    quality_score = calculate_quality_score(
+        macro_engine,
+        ["liquidez", "crescimento", "stress", "inflacao", "macro_score", "macro_conviction", "confidence_score"],
     )
 
-    invalid_jurisdiction_value = float(
-        df[df["jurisdicao_valida"] == False]["valor_atual"].sum()
-    )
+    if quality_score >= 95:
+        quality_status = "ALTA"
+    elif quality_score >= 80:
+        quality_status = "ACEITAVEL"
+    else:
+        quality_status = "FRAGIL"
 
-    max_rail_concentration = float(
-        (df.groupby("trilho")["valor_atual"].sum() / gross_value).max()
-        if gross_value > 0
-        else 1
-    )
-
-    max_entity_concentration = float(
-        (df.groupby("entidade")["valor_atual"].sum() / gross_value).max()
-        if gross_value > 0
-        else 1
-    )
-
-    critical_flags = []
-
-    if liquidity_score < 55:
-        critical_flags.append("LIQUIDEZ_OPERACIONAL_CRITICA")
-
-    if blocked_value > 0:
-        critical_flags.append("ATIVO_COM_ACESSO_BLOQUEADO")
-
-    if gross_value > 0 and invalid_jurisdiction_value / gross_value > 0.50:
-        critical_flags.append("MAIS_DE_50_EM_JURISDICAO_NAO_VALIDA")
-
-    if max_rail_concentration > 0.65:
-        critical_flags.append("CONCENTRACAO_DE_TRILHO_ACIMA_65")
-
-    if max_entity_concentration > 0.65:
-        critical_flags.append("CONCENTRACAO_DE_ENTIDADE_ACIMA_65")
-
-    liquidity_audit = df[[
-        "ativo",
-        "valor_atual",
-        "peso_atual",
-        "trilho",
-        "entidade",
-        "jurisdicao",
-        "status",
-        "criticidade",
-        "jurisdicao_valida",
-        "financial_haircut_pct",
-        "entity_haircut_pct",
-        "rail_haircut_pct",
-        "jurisdiction_haircut_pct",
-        "status_penalty_pct",
-        "criticidade_penalty_pct",
-        "total_haircut_pct",
-        "valor_liquido_operacional",
-        "access_score",
-        "access_level",
-    ]].copy()
-
-    liquidity_audit["timestamp_utc"] = timestamp_utc
-
-    liquidity_summary = pd.DataFrame([{
-        "timestamp_utc": timestamp_utc,
-
-        # colunas antigas obrigatórias
-        "gross_value": round(gross_value, 2),
-        "liquid_value": round(liquid_value, 2),
-        "aggregate_haircut_pct": round(aggregate_haircut_pct * 100, 2),
-
-        # colunas novas operacionais
-        "operational_liquid_value": round(liquid_value, 2),
-        "aggregate_operational_haircut_pct": round(aggregate_haircut_pct * 100, 2),
-
-        "liquidity_score": liquidity_score,
-        "liquidity_level": liquidity_level,
-        "blocked_value": round(blocked_value, 2),
-        "invalid_jurisdiction_value": round(invalid_jurisdiction_value, 2),
-        "max_rail_concentration_pct": round(max_rail_concentration * 100, 2),
-        "max_entity_concentration_pct": round(max_entity_concentration * 100, 2),
-        "critical_flags": " | ".join(critical_flags) if critical_flags else "",
+    audit = pd.DataFrame([{
+        "timestamp_utc": utc_now(),
+        "liquidez": float(latest["liquidez"]),
+        "crescimento": float(latest["crescimento"]),
+        "stress": float(latest["stress"]),
+        "inflacao": float(latest["inflacao"]),
+        "macro_score": float(latest["macro_score"]),
+        "macro_momentum": float(latest["macro_momentum"]),
+        "macro_momentum_score": float(latest["macro_momentum_score"]),
+        "confidence_score": float(latest["confidence_score"]),
+        "macro_conviction": float(latest["macro_conviction"]),
+        "regime": latest["regime"],
+        "sinal_operacional": latest["sinal_operacional"],
+        "data_quality_score": quality_score,
+        "data_quality_status": quality_status,
     }])
 
-    ensure_outputs_dir()
+    return macro_engine, latest, audit
 
-    liquidity_audit.to_csv(
-        os.path.join(OUTPUT_DIR, "liquidity_audit.csv"),
-        index=False,
-    )
 
-    liquidity_summary.to_csv(
-        os.path.join(OUTPUT_DIR, "liquidity_summary.csv"),
-        index=False,
-    )
+def run_deterioration_detector(fred_data):
+    latest = fred_data.iloc[-1]
 
-    print("====================================================")
-    print("OPERATIONAL LIQUIDITY ENGINE")
-    print("====================================================")
-    print(f"Data UTC:                      {timestamp_utc}")
-    print(f"Valor Bruto:                   US${gross_value:,.2f}")
-    print(f"Valor Liquido:                 US${liquid_value:,.2f}")
-    print(f"Haircut Agregado:              {aggregate_haircut_pct:.2%}")
-    print(f"Liquidity Score:               {liquidity_score}")
-    print(f"Liquidity Level:               {liquidity_level}")
-    print(f"Max Rail Concentration:        {max_rail_concentration:.2%}")
-    print(f"Max Entity Concentration:      {max_entity_concentration:.2%}")
+    real_yield = float(latest["real_yield_10y"])
+    financial_conditions = float(latest["financial_conditions"])
+    hy_spread = float(latest["high_yield_spread"])
+    inflation = float(latest["inflation_5y5y"])
+    yield_curve = float(latest["yield_curve"])
 
-    if critical_flags:
-        print(f"Critical Flags:                {' | '.join(critical_flags)}")
+    signals = {
+        "real_yield_alert": real_yield > 2.50,
+        "financial_conditions_alert": financial_conditions > 0.50,
+        "high_yield_alert": hy_spread > 4.50,
+        "inflation_alert": inflation > 3.25,
+        "yield_curve_alert": yield_curve < 0,
+    }
+
+    alert_count = sum(signals.values())
+
+    if alert_count == 0:
+        deterioration_score = 100
+        deterioration_status = "SEM_DETERIORACAO"
+    elif alert_count == 1:
+        deterioration_score = 80
+        deterioration_status = "ATENCAO"
+    elif alert_count == 2:
+        deterioration_score = 60
+        deterioration_status = "DETERIORACAO_INICIAL"
+    elif alert_count == 3:
+        deterioration_score = 40
+        deterioration_status = "DETERIORACAO_RELEVANTE"
     else:
-        print("Critical Flags:                Nenhuma")
+        deterioration_score = 20
+        deterioration_status = "DETERIORACAO_SEVERA"
 
+    return pd.DataFrame([{
+        "timestamp_utc": utc_now(),
+        "real_yield_10y": real_yield,
+        "financial_conditions": financial_conditions,
+        "high_yield_spread": hy_spread,
+        "inflation_5y5y": inflation,
+        "yield_curve": yield_curve,
+        "alerts": alert_count,
+        "deterioration_score": deterioration_score,
+        "deterioration_status": deterioration_status,
+        "early_warning": deterioration_score <= 60,
+    }])
+
+
+def run_liquidity_forecast(scores, macro_engine_audit=None, latest=None):
+    liquidity_series = scores["liquidity_score"].astype(float).dropna()
+
+    current_liquidity = float(liquidity_series.iloc[-1])
+    lag_30 = float(liquidity_series.tail(min(30, len(liquidity_series))).mean())
+    lag_60 = float(liquidity_series.tail(min(60, len(liquidity_series))).mean())
+    lag_90 = float(liquidity_series.tail(min(90, len(liquidity_series))).mean())
+    lag_120 = float(liquidity_series.tail(min(120, len(liquidity_series))).mean())
+
+    future_liquidity_score = (
+        current_liquidity * 0.40
+        + lag_30 * 0.25
+        + lag_60 * 0.15
+        + lag_90 * 0.10
+        + lag_120 * 0.10
+    )
+
+    liquidity_momentum = current_liquidity - lag_60
+    liquidity_acceleration = (lag_30 - lag_60) - (lag_60 - lag_90)
+
+    expansion_probability = np.clip(
+        future_liquidity_score
+        + max(liquidity_momentum, 0) * 0.20
+        + max(liquidity_acceleration, 0) * 0.10,
+        0,
+        100,
+    )
+
+    if expansion_probability >= 70:
+        future_regime = "EXPANSAO"
+    elif expansion_probability >= 55:
+        future_regime = "NEUTRO_POSITIVO"
+    elif expansion_probability >= 40:
+        future_regime = "NEUTRO_FRAGIL"
+    else:
+        future_regime = "CONTRACAO"
+
+    asset_signal = "POSITIVO" if future_regime in ["EXPANSAO", "NEUTRO_POSITIVO"] else "NEUTRO_NEGATIVO"
+
+    return pd.DataFrame([{
+        "timestamp_utc": utc_now(),
+        "current_liquidity": current_liquidity,
+        "lag_30": lag_30,
+        "lag_60": lag_60,
+        "lag_90": lag_90,
+        "lag_120": lag_120,
+        "future_liquidity_score": future_liquidity_score,
+        "liquidity_momentum": liquidity_momentum,
+        "liquidity_acceleration": liquidity_acceleration,
+        "expansion_probability": expansion_probability,
+        "future_regime": future_regime,
+        "btc_signal": asset_signal,
+        "voo_signal": asset_signal,
+        "botz_signal": asset_signal,
+        "inda_signal": asset_signal,
+    }])
+
+
+def run_macro_engine(fred_data, market_data):
+    ensure_outputs()
+
+    scores = build_scores(fred_data=fred_data, market_data=market_data)
+
+    macro_engine, latest, macro_engine_audit = build_macro_engine(scores)
+
+    deterioration_audit = run_deterioration_detector(fred_data)
+
+    liquidity_forecast = run_liquidity_forecast(
+        scores=scores,
+        macro_engine_audit=macro_engine_audit,
+        latest=latest,
+    )
+
+    macro_engine_audit.to_csv("outputs/macro_engine_audit.csv", index=False)
+    deterioration_audit.to_csv("outputs/deterioration_audit.csv", index=False)
+    liquidity_forecast.to_csv("outputs/liquidity_forecast_log.csv", index=False)
+
+    scores.tail(1).to_csv("outputs/macro_scores_latest.csv")
+    macro_engine.tail(1).to_csv("outputs/macro_engine_latest.csv")
+
+    print("====================================================")
+    print("MACRO ENGINE FINALIZADO")
+    print("====================================================")
+    print(f"Regime:             {latest['regime']}")
+    print(f"Sinal:              {latest['sinal_operacional']}")
+    print(f"Macro Conviction:   {latest['macro_conviction']:.2f}")
+    print(f"Macro Momentum:     {latest['macro_momentum']:.2f}")
+    print(f"Confidence Score:   {latest['confidence_score']:.2f}")
     print("====================================================")
 
     return {
-        "liquidity_audit": liquidity_audit,
-        "liquidity_summary": liquidity_summary,
+        "scores": scores,
+        "macro_engine": macro_engine,
+        "latest": latest,
+        "macro_engine_audit": macro_engine_audit,
+        "deterioration_audit": deterioration_audit,
+        "liquidity_forecast": liquidity_forecast,
     }
